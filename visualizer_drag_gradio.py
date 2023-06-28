@@ -7,7 +7,7 @@ import gradio as gr
 import numpy as np
 import torch
 from PIL import Image
-
+import imageio
 import dnnlib
 from gradio_utils import (ImageMask, draw_mask_on_image, draw_points_on_image,
                           get_latest_points_pair, get_valid_mask,
@@ -261,15 +261,37 @@ def on_click_inverse_custom_image(custom_image,global_state):
     global_state['generator_params'].image = inversed_img
     global_state['generator_params'].w = w_pivot.detach().cpu().numpy()
     global_state['renderer'].set_latent(w_pivot,global_state['params']['trunc_psi'],global_state['params']['trunc_cutoff'])
-    clear_state(global_state)
+
     del percept
     del pti
     print('inverse end')
 
-    return global_state, global_state['images']['image_show']
+    return global_state, global_state['images']['image_show'], gr.Button.update(interactive=True)
 
+def on_save_image(global_state,form_save_image_path):
+    imageio.imsave(form_save_image_path,global_state['images']['image_raw'])
 
+def on_reset_custom_image(global_state):
+    if isinstance(global_state, gr.State):
+        state = global_state.value
+    else:
+        state = global_state
+    clear_state(state)
+    state['renderer'].w = state['renderer'].w0.detach().clone()
+    state['renderer'].w.requires_grad = True
+    state['renderer'].w_optim = torch.optim.Adam([state['renderer'].w], lr=state['renderer'].lr)
+    state['renderer']._render_drag_impl(state['generator_params'],
+                                        is_drag=False,
+                                        to_pil=True)
 
+    init_image = state['generator_params'].image
+    state['images']['image_orig'] = init_image
+    state['images']['image_raw'] = init_image
+    state['images']['image_show'] = Image.fromarray(
+        add_watermark_np(np.array(init_image)))
+    state['mask'] = np.ones((init_image.size[1], init_image.size[0]),
+                            dtype=np.uint8)
+    return state, state['images']['image_show']
 def on_change_lr(lr, global_state):
     if lr == 0:
         print('lr is 0, do nothing.')
@@ -357,9 +379,9 @@ def on_click_start(global_state, image):
         # reverse points order
         p_to_opt = reverse_point_pairs(p_in_pixels)
         t_to_opt = reverse_point_pairs(t_in_pixels)
-        print('Running with:')
-        print(f'    Source: {p_in_pixels}')
-        print(f'    Target: {t_in_pixels}')
+        #print('Running with:')
+        #print(f'    Source: {p_in_pixels}')
+        #print(f'    Target: {t_in_pixels}')
         step_idx = 0
         while True:
             if global_state["temporal_params"]["stop"]:
@@ -390,7 +412,7 @@ def on_click_start(global_state, image):
                 to_pil=True)
 
             if step_idx % global_state['draw_interval'] == 0:
-                print('Current Source:')
+                #print('Current Source:')
                 for key_point, p_i, t_i in zip(valid_points, p_to_opt,
                                                t_to_opt):
                     global_state["points"][key_point]["start_temp"] = [
@@ -403,7 +425,7 @@ def on_click_start(global_state, image):
                     ]
                     start_temp = global_state["points"][key_point][
                         "start_temp"]
-                    print(f'    {start_temp}')
+                    #print(f'    {start_temp}')
 
                 image_result = global_state['generator_params']['image']
                 image_draw = update_image_draw(
@@ -736,6 +758,13 @@ if __name__ == "__main__":
                                 with gr.Column(scale=3, min_width=10):
                                     form_custom_image = gr.UploadButton(label="inverse custom image",
                                                                         file_types=['.png', '.jpg', '.jpeg'])
+                                with gr.Column(scale=3, min_width=10):
+                                    form_reset_custom_image = gr.Button('reset custom image', interactive=False)
+                            with gr.Row():
+                                with gr.Column(scale=3, min_width=10):
+                                    form_save_image_path = gr.Textbox(label="save image to",value='./test.png')
+                                    form_save_image = gr.Button('save',interactive=True)
+
 
                     # Drag
                     with gr.Row():
@@ -902,8 +931,10 @@ if __name__ == "__main__":
             outputs=[global_state],
         )
         form_custom_image.upload(on_click_inverse_custom_image, inputs=[form_custom_image, global_state],
-                                 outputs=[global_state, form_image])
-        # form_image.upload(on_click_inverse_custom_image, inputs=[form_image, global_state],outputs=[global_state, form_image])
+                                 outputs=[global_state, form_image,form_reset_custom_image])
+        form_save_image.click(on_save_image,inputs=[global_state,form_save_image_path],outputs=[])
+
+        form_reset_custom_image.click(on_reset_custom_image,inputs=[global_state],outputs=[global_state,form_image])
         # ==== Params
         form_lambda_number.change(
             partial(on_change_single_global_state, ["params", "motion_lambda"]),
