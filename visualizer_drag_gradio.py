@@ -220,7 +220,7 @@ def on_click_latent_space(latent_space, global_state):
 
 def on_click_inverse_custom_image(custom_image,global_state):
     print('inverse GAN')
-    
+
     if isinstance(global_state, gr.State):
         state = global_state.value
     else:
@@ -246,7 +246,7 @@ def on_click_inverse_custom_image(custom_image,global_state):
     image = Image.open(custom_image.name)
 
     pti = PTI(global_state['renderer'].G,percept)
-    inversed_img, w_pivot = pti.train(image)
+    inversed_img, w_pivot = pti.train(image,state['params']['latent_space'] == 'w+')
     inversed_img = (inversed_img[0] * 127.5 + 128).clamp(0, 255).to(torch.uint8).permute(1, 2, 0)
     inversed_img = inversed_img.cpu().numpy()
     inversed_img = Image.fromarray(inversed_img)
