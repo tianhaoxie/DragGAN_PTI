@@ -83,7 +83,7 @@ class InverseConfig:
     step = 1000
     noise_regularize = 1e5
     mse = 0.1
-    w_plus = False,
+
 
 
 def inverse_image(
@@ -91,6 +91,7 @@ def inverse_image(
     image,
     percept,
     image_size=256,
+    w_plus = False,
     config=InverseConfig(),
     device='cuda:0'
 ):
@@ -137,19 +138,21 @@ def inverse_image(
 
 
 
+
     noises = {name: buf for (name, buf) in g_ema.synthesis.named_buffers() if 'noise_const' in name}
     for noise in noises.values():
-        noise[:] = torch.randn_like(noise)
+        noise = torch.randn_like(noise)
         noise.requires_grad = True
 
 
 
     w_opt = w_avg.detach().clone()
+    if w_plus:
+        w_opt = w_opt.repeat(1,g_ema.mapping.num_ws, 1)
     w_opt.requires_grad = True
     #if args.w_plus:
         #latent_in = latent_in.unsqueeze(1).repeat(1, g_ema.n_latent, 1)
 
-    w_opt.requires_grad = True
 
 
     optimizer = optim.Adam([w_opt] + list(noises.values()), lr=args.lr)
@@ -164,7 +167,11 @@ def inverse_image(
         noise_strength = w_std * args.noise * max(0, 1 - t / args.noise_decay) ** 2
 
         w_noise = torch.randn_like(w_opt) * noise_strength
-        ws = (w_opt + w_noise).repeat([1, g_ema.mapping.num_ws, 1])
+        if w_plus:
+            ws = w_opt + w_noise
+        else:
+            ws = (w_opt + w_noise).repeat([1, g_ema.mapping.num_ws, 1])
+
         img_gen = g_ema.synthesis(ws, noise_mode='const', force_fp32=True)
 
         #latent_n = latent_noise(latent_in, noise_strength.item())
@@ -216,8 +223,11 @@ def inverse_image(
 
     #latent, noise = g_ema.prepare([latent_path[-1]], input_is_latent=True, noise=noises)
     #img_gen, F = g_ema.generate(latent, noise)
+    if w_plus:
+        ws = latent_path[-1]
+    else:
+        ws = latent_path[-1].repeat([1, g_ema.mapping.num_ws, 1])
 
-    ws = latent_path[-1].repeat([1, g_ema.mapping.num_ws, 1])
     img_gen = g_ema.synthesis(ws, noise_mode='const')
 
 
@@ -248,10 +258,13 @@ class PTI:
         loss = p_loss +self.l2_lambda * mse_loss
         return loss
 
-    def train(self,img):
-        inversed_result = inverse_image(self.g_ema,img,self.percept,self.g_ema.img_resolution)
+    def train(self,img,w_plus=False):
+        inversed_result = inverse_image(self.g_ema,img,self.percept,self.g_ema.img_resolution,w_plus)
         w_pivot = inversed_result['latent']
-        ws = w_pivot.repeat([1, self.g_ema.mapping.num_ws, 1])
+        if w_plus:
+            ws = w_pivot
+        else:
+            ws = w_pivot.repeat([1, self.g_ema.mapping.num_ws, 1])
         toogle_grad(self.g_ema,True)
         optimizer = torch.optim.Adam(self.g_ema.parameters(), lr=self.pti_lr)
         print('start PTI')
@@ -335,8 +348,8 @@ if __name__ == "__main__":
         model="net-lin", net="vgg", use_gpu=True
     )
     pti = PTI(G,percept)
-    result = pti.train(image)
-    imageio.imsave('../horse/test.png', make_image(result)[0])
+    result = pti.train(image,True)
+    imageio.imsave('../horse/test.png', make_image(result[0])[0])
 
 
 
